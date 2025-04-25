@@ -230,3 +230,7 @@ if __name__ == '__main__':
 
     # Save the trained model
     torch.save(trained_model.state_dict(), 'simclr_model.pth')
+    
+    
+    ##! early stopping = 5, epochs = 50
+    ##! training validation curve
