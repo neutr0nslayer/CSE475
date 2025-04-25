@@ -1,0 +1,232 @@
+import pandas as pd
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
+from PIL import Image
+import os
+import torch
+from torchvision import models, transforms
+import torch.nn.functional as F
+import matplotlib.pyplot as plt
+import time
+
+import warnings
+warnings.filterwarnings("ignore")
+
+
+# Load the uploaded CSV files to inspect the data
+train_image_paths = pd.read_csv('Dataset\\MURA-v1.1\\merged_train_image_labels.csv')
+valid_image_paths = pd.read_csv('Dataset\\MURA-v1.1/merged_valid_image_labels.csv')
+train_labeled_studies = pd.read_csv('Dataset\\MURA-v1.1\\merged_train_image_labels.csv')
+valid_labeled_studies = pd.read_csv('Dataset\\MURA-v1.1/merged_valid_image_labels.csv')
+
+# fill nulls in the 2nd column of each loaded DF with 1
+for df in [train_image_paths, valid_image_paths, train_labeled_studies, valid_labeled_studies]:
+    second_col = df.columns[1]
+    df[second_col] = df[second_col].fillna(1)
+    
+# Display the first few rows of each file to understand their structure
+# train_image_paths.head(), valid_image_paths.head(), train_labeled_studies.head(), valid_labeled_studies.head()
+# train_image_paths.info()
+# valid_image_paths.info()
+
+
+# Custom Dataset class to handle images and labels
+base_dir = 'Dataset/'
+
+# Update the Dataset class to include the base directory in image paths
+class XrayDataset(Dataset):
+    def __init__(self, image_paths, labels, transform=None):
+        self.image_paths = [os.path.join(base_dir, path) for path in image_paths]  # Prepend the base directory to paths
+        self.labels = labels
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.image_paths)
+
+    def __getitem__(self, idx):
+        image_path = self.image_paths[idx]
+        label = int(self.labels[idx])  # Ensure the label is an integer (0 or 1)
+
+        # Open image
+        image = Image.open(image_path).convert("RGB")
+        
+        if self.transform:
+            image = self.transform(image)
+        
+        return image, label
+
+# Combine image paths and labels for training and validation
+# Fix the dataset merging by ensuring the columns match properly
+train_data = pd.DataFrame({
+    'image_path': train_image_paths.iloc[:, 0],  # Use the first column for image paths
+    'label': train_image_paths.iloc[:, 1]    # Use the second column for labels
+})
+
+valid_data = pd.DataFrame({
+    'image_path': valid_image_paths.iloc[:, 0],  # Use the first column for image paths
+    'label': valid_image_paths.iloc[:, 1]    # Use the second column for labels
+})
+
+# # Verify the structure after correction
+# len(train_data), len(valid_data), train_data.head(), valid_data.head()
+
+
+simclr_transform = transforms.Compose([
+    transforms.RandomResizedCrop(224),
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomApply(
+        [transforms.ColorJitter(0.4,0.4,0.4,0.1)],
+        p=0.8
+    ),
+    transforms.RandomGrayscale(p=0.2),
+    transforms.ToTensor(),
+    transforms.Normalize(
+        mean=[0.485,0.456,0.406],
+        std=[0.229,0.224,0.225]
+    )
+])
+
+# simclr_transform = transforms.Compose([
+#     transforms.Resize((224, 224)),
+#     transforms.ToTensor(),
+#     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+# ])
+
+
+# Create Dataset instances for training and validation
+train_dataset = XrayDataset(image_paths=train_data['image_path'].values, labels=train_data['label'].values, transform=simclr_transform)
+valid_dataset = XrayDataset(image_paths=valid_data['image_path'].values, labels=valid_data['label'].values, transform=simclr_transform)
+
+# Create DataLoader instances for batching
+train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True, num_workers=8)
+valid_loader = DataLoader(valid_dataset, batch_size=16, shuffle=False, num_workers=8)
+
+# Verify the dataset and dataloader setup by checking a sample
+# sample_image, sample_label = train_dataset[0]
+# sample_image.size(), sample_label
+
+
+
+# SimCLR model definition with fixed access to feature dimension
+class SimCLR(nn.Module):
+    def __init__(self, base_model, projection_dim=128):
+        super(SimCLR, self).__init__()
+        self.base_model = base_model
+        # Remove the fully connected layer (fc)
+        self.base_model.fc = nn.Identity()
+        # Use the known feature dimension of ResNet-50 (2048)
+        self.projection_head = nn.Sequential(
+            nn.Linear(2048, 2048),
+            nn.ReLU(),
+            nn.Linear(2048, projection_dim),
+        )
+
+    def forward(self, x):
+        features = self.base_model(x)
+        projections = self.projection_head(features)
+        return projections
+    
+# Load a pre-trained ResNet model
+resnet_model = models.resnet50(pretrained=True)
+
+# Create the SimCLR model
+simclr_model = SimCLR(resnet_model)
+
+# Print the model to verify
+simclr_model
+
+
+
+# NT-Xent Loss Implementation
+
+class NTXentLoss(nn.Module):
+    def __init__(self, temperature=0.5):
+        super(NTXentLoss, self).__init__()
+        self.temperature = temperature
+
+    def forward(self, z1, z2):
+        # Normalize the projections (L2 normalization)
+        z1 = F.normalize(z1, p=2, dim=-1)
+        z2 = F.normalize(z2, p=2, dim=-1)
+
+        # Compute cosine similarity between pairs
+        similarity_matrix = torch.matmul(z1, z2.T) / self.temperature
+        labels = torch.arange(z1.size(0)).to(z1.device)
+
+        # Calculate NT-Xent loss (contrastive loss)
+        loss = F.cross_entropy(similarity_matrix, labels)
+        return loss
+
+
+# Set up the model, loss function, and optimizer
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#device = torch.device("cpu")
+# print(f"Using device: {device}")
+
+
+
+# Move the model to the appropriate device (GPU/CPU)
+simclr_model = simclr_model.to(device)
+
+# Define the NT-Xent loss
+criterion = NTXentLoss(temperature=0.5)
+
+# Set up the optimizer
+optimizer = torch.optim.Adam(simclr_model.parameters(), lr=1e-3)
+
+# Verify the setup
+simclr_model, criterion, optimizer
+
+
+
+from tqdm import tqdm
+
+# Updated Training Loop for SimCLR with Progress Bar
+
+def train_simclr_with_progress_and_timing(model, train_loader, criterion, optimizer, device, epochs=5):
+    model.train()  # Set the model to training mode
+    for epoch in range(epochs):
+        running_loss = 0.0
+        start_time = time.time()
+        
+        # Initialize the progress bar using tqdm
+        progress_bar = tqdm(train_loader, desc=f'Epoch [{epoch+1}/{epochs}]', unit='batch')
+
+        for batch_idx, (images, _) in enumerate(progress_bar):
+            batch_start_time = time.time()  # Track batch loading time
+            images = images.to(device)
+
+            # Create positive and negative pairs by augmenting the data (SimCLR-specific)
+            images_1 = images
+            images_2 = images.flip(0)  # Flip images to create "negative" samples (this is just for example)
+
+            optimizer.zero_grad()  # Reset gradients
+
+            # Forward pass for both augmented images
+            projections_1 = model(images_1)
+            projections_2 = model(images_2)
+
+            # Calculate NT-Xent loss
+            loss = criterion(projections_1, projections_2)
+
+            loss.backward()  # Backpropagate the gradients
+            optimizer.step()  # Update the model parameters
+
+            running_loss += loss.item()
+
+            # Calculate batch loading time
+            batch_loading_time = time.time() - batch_start_time
+            progress_bar.set_postfix(loss=loss.item(), batch_time=f'{batch_loading_time:.4f}s')
+
+        # Calculate average loss for this epoch
+        avg_loss = running_loss / len(train_loader)
+        epoch_time = time.time() - start_time
+        print(f"Epoch [{epoch+1}/{epochs}], Loss: {avg_loss:.4f}, Time: {epoch_time:.2f}s")
+    
+    return model
+if __name__ == '__main__':
+    # Place the training function call here
+    trained_model = train_simclr_with_progress_and_timing(simclr_model, train_loader, criterion, optimizer, device, epochs=5)
+
+    # Save the trained model
+    torch.save(trained_model.state_dict(), 'simclr_model.pth')
