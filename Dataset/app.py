@@ -67,7 +67,7 @@ simclr_transform = transforms.Compose([
 # === Prediction Function ===
 def predict_image(image):
     image = image.convert('RGB')
-    image = transform(image).unsqueeze(0).to(device)
+    image = simclr_transform(image).unsqueeze(0).to(device)
 
     with torch.no_grad():
         outputs = classifier_model(image)
