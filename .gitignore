@@ -4,3 +4,4 @@ anaconda_projects
 .VENV
 *.pdf
 *.pth
+*.zip
