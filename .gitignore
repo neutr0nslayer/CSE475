@@ -1,7 +1,18 @@
+
+# dataset folder
 mangoleafbd dataset
+Rice-Panicle-Final-1
 MURA-v1.1
+balldataset
+
+# project folders
 anaconda_projects
+.gradio
+
+# misc
 .VENV
 *.pdf
 *.pth
 *.zip
+*.pt
+runs
