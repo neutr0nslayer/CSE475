@@ -43,21 +43,32 @@ base_resnet = resnet50(weights=ResNet50_Weights.DEFAULT)
 simclr_model = SimCLR(base_resnet)
 
 classifier_model = SimCLRClassifier(simclr_model)
-classifier_model.load_state_dict(torch.load('simclr_classifier_model.pth', map_location=device))
+classifier_model.load_state_dict(torch.load('best_simclr_classifier.pth', map_location=device))
 classifier_model = classifier_model.to(device)
 classifier_model.eval()
 
 # === Transform ===
-transform = transforms.Compose([
-    transforms.Resize((224, 224)),
+simclr_transform = transforms.Compose([
+    transforms.Resize((246, 246)), 
+    transforms.RandomResizedCrop(224),
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomApply(
+        [transforms.ColorJitter(0.4,0.4,0.4,0.1)],
+        p=0.8
+    ),
+    transforms.RandomGrayscale(p=0.2),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485,0.456,0.406], std=[0.229,0.224,0.225])
+    transforms.Normalize(
+        mean=[0.485,0.456,0.406],
+        std=[0.229,0.224,0.225]
+    )
 ])
+
 
 # === Prediction Function ===
 def predict_image(image):
     image = image.convert('RGB')
-    image = transform(image).unsqueeze(0).to(device)
+    image = simclr_transform(image).unsqueeze(0).to(device)
 
     with torch.no_grad():
         outputs = classifier_model(image)
@@ -76,7 +87,7 @@ def main():
         description="Upload an X-ray image and the model will predict if it is Normal or Abnormal.",
         theme="default"
     )
-    interface.launch()
+    interface.launch(share=True)
 
 if __name__ == "__main__":
     main()

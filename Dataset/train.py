@@ -72,6 +72,7 @@ valid_data = pd.DataFrame({
 
 
 simclr_transform = transforms.Compose([
+    transforms.Resize((246, 246)),
     transforms.RandomResizedCrop(224),
     transforms.RandomHorizontalFlip(),
     transforms.RandomApply(
@@ -157,7 +158,22 @@ class NTXentLoss(nn.Module):
         loss = F.cross_entropy(similarity_matrix, labels)
         return loss
 
+class EarlyStopping:
+    def __init__(self, patience=5):
+        self.patience = patience
+        self.best_loss = float('inf')
+        self.counter = 0
 
+    def step(self, val_loss):
+        if val_loss < self.best_loss:
+            self.best_loss = val_loss
+            self.counter = 0
+            return False
+        else:
+            self.counter += 1
+            return self.counter >= self.patience
+        
+        
 # Set up the model, loss function, and optimizer
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 #device = torch.device("cpu")
@@ -183,50 +199,68 @@ from tqdm import tqdm
 
 # Updated Training Loop for SimCLR with Progress Bar
 
-def train_simclr_with_progress_and_timing(model, train_loader, criterion, optimizer, device, epochs=5):
-    model.train()  # Set the model to training mode
+def train_simclr_with_early_stopping(model, train_loader, valid_loader, criterion, optimizer, device, epochs=50, patience=5):
+    model.train()
+    best_loss = float('inf')
+    epochs_no_improve = 0
+    best_model_state = None
+
     for epoch in range(epochs):
         running_loss = 0.0
-        start_time = time.time()
-        
-        # Initialize the progress bar using tqdm
-        progress_bar = tqdm(train_loader, desc=f'Epoch [{epoch+1}/{epochs}]', unit='batch')
-
-        for batch_idx, (images, _) in enumerate(progress_bar):
-            batch_start_time = time.time()  # Track batch loading time
+        model.train()
+        for images, _ in tqdm(train_loader, desc=f"Epoch [{epoch+1}/{epochs}]"):
             images = images.to(device)
-
-            # Create positive and negative pairs by augmenting the data (SimCLR-specific)
             images_1 = images
-            images_2 = images.flip(0)  # Flip images to create "negative" samples (this is just for example)
+            images_2 = images.flip(0)
 
-            optimizer.zero_grad()  # Reset gradients
-
-            # Forward pass for both augmented images
+            optimizer.zero_grad()
             projections_1 = model(images_1)
             projections_2 = model(images_2)
-
-            # Calculate NT-Xent loss
             loss = criterion(projections_1, projections_2)
 
-            loss.backward()  # Backpropagate the gradients
-            optimizer.step()  # Update the model parameters
-
+            loss.backward()
+            optimizer.step()
             running_loss += loss.item()
 
-            # Calculate batch loading time
-            batch_loading_time = time.time() - batch_start_time
-            progress_bar.set_postfix(loss=loss.item(), batch_time=f'{batch_loading_time:.4f}s')
+        avg_train_loss = running_loss / len(train_loader)
 
-        # Calculate average loss for this epoch
-        avg_loss = running_loss / len(train_loader)
-        epoch_time = time.time() - start_time
-        print(f"Epoch [{epoch+1}/{epochs}], Loss: {avg_loss:.4f}, Time: {epoch_time:.2f}s")
-    
+        # Validation Phase
+        model.eval()
+        with torch.no_grad():
+            val_loss = 0.0
+            for images, _ in valid_loader:
+                images = images.to(device)
+                images_1 = images
+                images_2 = images.flip(0)
+
+                proj1 = model(images_1)
+                proj2 = model(images_2)
+                val_loss += criterion(proj1, proj2).item()
+            avg_val_loss = val_loss / len(valid_loader)
+
+        print(f"Epoch {epoch+1}, Train Loss: {avg_train_loss:.4f}, Val Loss: {avg_val_loss:.4f}")
+
+        if avg_val_loss < best_loss:
+            best_loss = avg_val_loss
+            best_model_state = model.state_dict()
+            epochs_no_improve = 0
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= patience:
+                print("Early stopping triggered.")
+                break
+
+    if best_model_state:
+        model.load_state_dict(best_model_state)
     return model
+
 if __name__ == '__main__':
     # Place the training function call here
-    trained_model = train_simclr_with_progress_and_timing(simclr_model, train_loader, criterion, optimizer, device, epochs=5)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    trained_model = train_simclr_with_early_stopping(simclr_model, train_loader,valid_loader, criterion, optimizer, device, epochs=50, patience=5)
 
     # Save the trained model
     torch.save(trained_model.state_dict(), 'simclr_model.pth')
+    
+    
