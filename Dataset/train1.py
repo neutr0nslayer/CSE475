@@ -65,11 +65,7 @@ class NTXentLoss(nn.Module):
         return F.cross_entropy(similarity_matrix, labels)
 
 
-
-
-
-# Training function
-def train_simclr(model, train_loader, valid_loader, criterion, optimizer, device, epochs=50, patience=5):
+def train_valid_simclr(model, train_loader, valid_loader, criterion, optimizer, device, epochs=50, patience=5):
     model.train()
     best_loss = float('inf')
     best_model_state = None
@@ -125,18 +121,36 @@ def train_simclr(model, train_loader, valid_loader, criterion, optimizer, device
         model.load_state_dict(best_model_state)
     return model, train_losses, val_losses
 
-def get_recommended_batch_size(base_size=16):
-    if torch.cuda.is_available():
-        total_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)  # in GB
-        # Heuristic: Scale base batch size according to available memory
-        if total_mem < 4:
-            return base_size // 2  # Low-end GPU
-        elif total_mem < 8:
-            return base_size      # Mid-range GPU
-        else:
-            return base_size * 2  # High-end GPU
-    else:
-        return base_size // 2  # Use a smaller batch size on CPU
+
+# Training function
+def train_simclr(model, train_loader, criterion, optimizer, device, epochs=50):
+    model.train()
+    train_losses = []
+
+    for epoch in range(epochs):
+        running_loss = 0.0
+        model.train()
+        for images, _ in tqdm(train_loader, desc=f"Epoch [{epoch+1}/{epochs}]"):
+            images = images.to(device)
+            images_1 = images
+            images_2 = images.flip(0)
+
+            optimizer.zero_grad()
+            proj_1 = model(images_1)
+            proj_2 = model(images_2)
+            loss = criterion(proj_1, proj_2)
+            loss.backward()
+            optimizer.step()
+            running_loss += loss.item()
+
+        avg_train_loss = running_loss / len(train_loader)
+        train_losses.append(avg_train_loss)
+        print(f"Epoch {epoch+1}, Train Loss: {avg_train_loss:.4f}")
+
+    return model, train_losses
+
+
+
     
     
 # Main function
@@ -144,14 +158,14 @@ def main(
     train_csv='Dataset/MURA-v1.1/merged_train_image_labels.csv',
     valid_csv='Dataset/MURA-v1.1/merged_valid_image_labels.csv',
     base_dir='Dataset/',
-    batch_size=32, # 16 4
-    num_workers = min(os.cpu_count(), 8),  
+    batch_size=40, # 16 4
+    num_workers = min(os.cpu_count(), 10),  
     lr=1e-3,
     epochs=50,
     patience=5,
     projection_dim=128,
     temperature=0.5,
-    model_save_path='simclr_model.pth'
+    model_save_path='trained_model/simclr_model.pth'
 ):
     # Load CSVs
     train_df = pd.read_csv(train_csv)
@@ -167,7 +181,7 @@ def main(
         transforms.RandomResizedCrop(224),
         transforms.RandomHorizontalFlip(),
         transforms.RandomApply([transforms.ColorJitter(0.4,0.4,0.4,0.1)], p=0.8),
-        transforms.RandomGrayscale(p=0.2),
+        transforms.RandomGrayscale(p=0.2), # !remove
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
@@ -186,7 +200,8 @@ def main(
     criterion = NTXentLoss(temperature=temperature)
     optimizer = torch.optim.Adam(simclr_model.parameters(), lr=lr)
 
-    trained_model, train_losses, val_losses = train_simclr(simclr_model, train_loader, valid_loader, criterion, optimizer, device, epochs, patience)
+    trained_model, train_losses, val_losses = train_simclr(simclr_model, train_loader, criterion, optimizer, device, epochs)
+    # def train_simclr(model, train_loader, criterion, optimizer, device, epochs=50):
     torch.save(trained_model.state_dict(), model_save_path)
     print(f"Model saved to {model_save_path}")
     
@@ -202,3 +217,8 @@ def main(
 # Only run main if executed directly
 if __name__ == '__main__':
     main()
+# infonce  
+# early stop cancel in train_simclr
+# batch_size 100
+# mocca 
+# auc 
