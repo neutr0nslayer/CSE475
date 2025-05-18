@@ -123,11 +123,15 @@ def train_valid_simclr(model, train_loader, valid_loader, criterion, optimizer, 
 
 
 # Training function
-def train_simclr(model, train_loader, criterion, optimizer, device, epochs=50):
+def train_simclr(model, train_loader, criterion, optimizer, device, epochs=50, patience=5):
     model.train()
     train_losses = []
-
+    best_loss = float('inf')
+    patience_counter = 0
+    avg_loss = 0.0
+    
     for epoch in range(epochs):
+        print(f"Patience Counter: {patience_counter}, Best Loss: {best_loss} , Avg Loss: {avg_loss}")
         running_loss = 0.0
         model.train()
         for images, _ in tqdm(train_loader, desc=f"Epoch [{epoch+1}/{epochs}]"):
@@ -143,9 +147,21 @@ def train_simclr(model, train_loader, criterion, optimizer, device, epochs=50):
             optimizer.step()
             running_loss += loss.item()
 
-        avg_train_loss = running_loss / len(train_loader)
-        train_losses.append(avg_train_loss)
-        print(f"Epoch {epoch+1}, Train Loss: {avg_train_loss:.4f}")
+        avg_loss = running_loss / len(train_loader)
+        train_losses.append(avg_loss)
+        print(f"Epoch {epoch+1}, Train Loss: {avg_loss:.4f}, ")
+        print()
+
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            patience_counter = 0
+            torch.save(model.state_dict(), 'best_simclr_model.pth')
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                print("Early stopping triggered.")
+                break
+        
 
     return model, train_losses
 
@@ -155,10 +171,10 @@ def train_simclr(model, train_loader, criterion, optimizer, device, epochs=50):
     
 # Main function
 def main(
-    train_csv='Dataset/MURA-v1.1/merged_train_image_labels.csv',
+    train_csv='Dataset/balanced_train_image_labels.csv',
     valid_csv='Dataset/MURA-v1.1/merged_valid_image_labels.csv',
-    base_dir='Dataset/',
-    batch_size=40, # 16 4
+    base_dir='.',
+    batch_size=32, # 16 4
     num_workers = min(os.cpu_count(), 10),  
     lr=1e-3,
     epochs=50,
@@ -181,7 +197,7 @@ def main(
         transforms.RandomResizedCrop(224),
         transforms.RandomHorizontalFlip(),
         transforms.RandomApply([transforms.ColorJitter(0.4,0.4,0.4,0.1)], p=0.8),
-        transforms.RandomGrayscale(p=0.2), # !remove
+        #transforms.RandomGrayscale(p=0.2), # !remove
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     ])
@@ -200,16 +216,16 @@ def main(
     criterion = NTXentLoss(temperature=temperature)
     optimizer = torch.optim.Adam(simclr_model.parameters(), lr=lr)
 
-    trained_model, train_losses, val_losses = train_simclr(simclr_model, train_loader, criterion, optimizer, device, epochs)
+    trained_model, train_losses= train_simclr(simclr_model, train_loader, criterion, optimizer, device, epochs)
     # def train_simclr(model, train_loader, criterion, optimizer, device, epochs=50):
     torch.save(trained_model.state_dict(), model_save_path)
     print(f"Model saved to {model_save_path}")
     
     plt.plot(train_losses, label='Train Loss')
-    plt.plot(val_losses, label='Validation Loss')
+    # plt.plot(val_losses, label='Validation Loss')
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
-    plt.title('Training vs Validation Loss')
+    plt.title('Training Loss')
     plt.legend()
     plt.show()
 
@@ -222,3 +238,6 @@ if __name__ == '__main__':
 # batch_size 100
 # mocca 
 # auc 
+
+
+## DATASET ABNORMAL NORMAL  

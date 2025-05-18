@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import classification_report
 from tqdm import tqdm
 import warnings
+import sys
 
 warnings.filterwarnings("ignore")
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -66,14 +67,32 @@ def get_transforms():
         transforms.RandomResizedCrop(224),
         transforms.RandomHorizontalFlip(),
         transforms.RandomApply([transforms.ColorJitter(0.4, 0.4, 0.4, 0.1)], p=0.8),
-        transforms.RandomGrayscale(p=0.2),
+        #transforms.RandomGrayscale(p=0.2),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406],
                              std=[0.229, 0.224, 0.225])
     ])
 
 
-def train_classifier(model, train_loader, valid_loader, criterion, optimizer, device, epochs=50, patience=5):
+def train_classifier(model, train_loader, valid_loader, criterion, optimizer, device, epochs=50, patience=5, log_path='training_log.txt', plot_dir='plots'):
+    os.makedirs(plot_dir, exist_ok=True)
+
+    # Logger to write output to file and console
+    class Logger:
+        def __init__(self, filepath):
+            self.terminal = sys.stdout
+            self.log = open(filepath, "w")
+
+        def write(self, message):
+            self.terminal.write(message)
+            self.log.write(message)
+
+        def flush(self):
+            self.terminal.flush()
+            self.log.flush()
+
+    sys.stdout = Logger(log_path)
+
     model = model.to(device)
     train_losses, valid_losses = [], []
     train_accuracies, valid_accuracies = [], []
@@ -139,7 +158,7 @@ def train_classifier(model, train_loader, valid_loader, criterion, optimizer, de
 
         if avg_valid_loss < best_val_loss:
             best_val_loss = avg_valid_loss
-            torch.save(model.state_dict(), 'best_simclr_classifier.pth') 
+            torch.save(model.state_dict(), 'best_simclr_classifier.pth')
             patience_counter = 0
         else:
             patience_counter += 1
@@ -150,6 +169,7 @@ def train_classifier(model, train_loader, valid_loader, criterion, optimizer, de
     print("\nFinal Classification Report:")
     print(classification_report(all_labels, all_preds, target_names=["Normal", "Abnormal"]))
 
+    # Save plots
     plt.figure(figsize=(12, 5))
     plt.subplot(1, 2, 1)
     plt.plot(train_losses, label='Train Loss')
@@ -170,7 +190,12 @@ def train_classifier(model, train_loader, valid_loader, criterion, optimizer, de
     plt.grid(True)
 
     plt.tight_layout()
-    plt.show()
+    plt.savefig(os.path.join(plot_dir, 'training_curves.png'))
+    plt.close()
+
+    # Restore default stdout
+    sys.stdout.log.close()
+    sys.stdout = sys.stdout.terminal
 
     return model
 
@@ -180,13 +205,15 @@ def main():
     base_dir = 'Dataset/'
     train_csv = os.path.join(base_dir, 'MURA-v1.1', 'merged_train_image_labels.csv')
     valid_csv = os.path.join(base_dir, 'MURA-v1.1', 'merged_valid_image_labels.csv')
-    pretrained_simclr_path = 'E:\\CSE475\\simclr_model.pth'
+    pretrained_simclr_path = 'trained_model/simclr_model.pth'
     batch_size = 32
     num_workers = 8
     num_classes = 2
     learning_rate = 1e-4
     num_epochs = 50
     patience = 5
+    log_file = 'training_log.txt'
+    plot_dir = 'plots'
 
     # ==== Load CSVs and Prepare DataFrames ====
     train_df = pd.read_csv(train_csv)
@@ -230,10 +257,12 @@ def main():
         optimizer,
         device,
         epochs=num_epochs,
-        patience=patience
+        patience=patience,
+        log_path=log_file,
+        plot_dir=plot_dir
     )
 
-    torch.save(trained_model.state_dict(), 'simclr_classifier_model.pth')
+    torch.save(trained_model.state_dict(), 'trained_model/simclr_classifier_model.pth')
 
 
 if __name__ == '__main__':
