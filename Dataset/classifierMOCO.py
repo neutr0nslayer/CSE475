@@ -207,7 +207,7 @@ def train_classifier(model, train_loader, valid_loader, criterion, optimizer, de
     disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["Normal", "Abnormal"])
     disp.plot(cmap=plt.cm.Blues)
     plt.title("Confusion Matrix")
-    plt.savefig(os.path.join(plot_dir, 'confusion_matrix.png'))
+    plt.savefig(os.path.join(plot_dir, 'moco_confusion_matrix.png'))
     plt.close()
 
     try:
