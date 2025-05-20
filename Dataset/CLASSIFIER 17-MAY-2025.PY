@@ -260,7 +260,7 @@ def main():
     num_classes = 2
     learning_rate = 1e-4
     num_epochs = 50
-    patience = 5
+    patience = 50
     log_file = 'training_log.txt'
     plot_dir = 'plots'
 
