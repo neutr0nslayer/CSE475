@@ -1,0 +1,1 @@
+MURA-v1.1/valid/XR_WRIST/patient11205/study1_positive/image2.png
